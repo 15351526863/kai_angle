@@ -313,15 +313,15 @@ namespace hacks {
 
 		const auto& cfg = g_menu->main( ).m_aim_bot_cfg.get( );
 
-		switch ( wpn->item_index( ) )
-		{
-		case valve::e_item_index::awp:
-			return cfg.m_static_point_scale_awp;
-		case valve::e_item_index::ssg08:
-			return cfg.m_hit_chance_scout;
-		case valve::e_item_index::scar20:
-		case valve::e_item_index::g3sg1:
-			return cfg.m_static_point_scale_scar;
+               switch ( wpn->item_index( ) )
+               {
+               case valve::e_item_index::awp:
+                       return cfg.m_static_point_scale_awp;
+               case valve::e_item_index::ssg08:
+                        return cfg.m_static_point_scale_scout;
+               case valve::e_item_index::scar20:
+               case valve::e_item_index::g3sg1:
+                       return cfg.m_static_point_scale_scar;
 		case valve::e_item_index::ak47:
 		case valve::e_item_index::aug:
 		case valve::e_item_index::bizon:
@@ -930,79 +930,62 @@ namespace hacks {
 	}
 
 
-	void c_aim_bot::player_move( extrapolation_data_t& data ) const {
-		static auto sv_gravity = valve::g_cvar->find_var( ( MilfStr( "sv_gravity" ) ) );
-		static auto sv_enable_bhop = valve::g_cvar->find_var( ( MilfStr( "sv_enablebunnyhopping" ) ) );
-		static auto sv_jump_impulse = valve::g_cvar->find_var( MilfStr( "sv_jump_impulse" ) );
+       void c_aim_bot::player_move( extrapolation_data_t& data ) const {
+               valve::trace_t trace{};
+               valve::trace_filter_world_only_t trace_filter{};
 
-		if ( !( data.m_flags & valve::e_ent_flags::on_ground ) ) {
-			if ( !sv_enable_bhop->get_int( ) ) {
-				const auto speed = data.m_velocity.length( );
+               sdk::vec3_t start = data.m_origin;
+               sdk::vec3_t end = start + ( data.m_velocity * valve::g_global_vars.get( )->m_interval_per_tick );
 
-				const auto max_speed = data.m_player->max_speed( ) * 1.1f;
-				if ( max_speed > 0.f
-					&& speed > max_speed )
-					data.m_velocity *= ( max_speed / speed );
-			}
+               valve::g_engine_trace->trace_ray(
+                       { start, end, data.m_obb_min, data.m_obb_max },
+                       ( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
+               );
 
-			if ( data.m_was_in_air )
-				data.m_velocity.z( ) = sv_jump_impulse->get_float( );
-		}
-		else
-			data.m_velocity.z( ) -=
-			sv_gravity->get_float( ) * valve::g_global_vars.get( )->m_interval_per_tick;
+               if ( trace.m_frac != 1.f ) {
+                       for ( int i{}; i < 2; ++i ) {
+                               if ( data.m_velocity.length( ) == 0.f )
+                                       break;
 
-		valve::trace_t trace{};
-		valve::trace_filter_world_only_t trace_filter{};
+                               data.m_velocity -= trace.m_plane.m_normal * data.m_velocity.dot( trace.m_plane.m_normal );
 
-		valve::g_engine_trace->trace_ray(
-			{
-				data.m_origin,
-				data.m_origin + data.m_velocity * valve::g_global_vars.get( )->m_interval_per_tick,
-				data.m_obb_min, data.m_obb_max
-			},
-			( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
-		);
+                               float adjust = data.m_velocity.dot( trace.m_plane.m_normal );
+                               if ( adjust < 0.f )
+                                       data.m_velocity -= trace.m_plane.m_normal * adjust;
 
-		if ( trace.m_frac != 1.f ) {
-			for ( int i{}; i < 2; ++i ) {
-				data.m_velocity -= trace.m_plane.m_normal * data.m_velocity.dot( trace.m_plane.m_normal );
+                               start = trace.m_end;
+                               end = start + ( data.m_velocity * ( valve::g_global_vars.get( )->m_interval_per_tick * ( 1.f - trace.m_frac ) ) );
 
-				const auto adjust = data.m_velocity.dot( trace.m_plane.m_normal );
-				if ( adjust < 0.f )
-					data.m_velocity -= trace.m_plane.m_normal * adjust;
+                               valve::g_engine_trace->trace_ray(
+                                       { start, end, data.m_obb_min, data.m_obb_max },
+                                       ( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
+                               );
 
-				valve::g_engine_trace->trace_ray(
-					{
-						trace.m_end,
-						trace.m_end + ( data.m_velocity * ( valve::g_global_vars.get( )->m_interval_per_tick * ( 1.f - trace.m_frac ) ) ),
-						data.m_obb_min, data.m_obb_max
-					},
-					( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
-				);
+                               if ( trace.m_frac == 1.f )
+                                       break;
+                       }
+               }
 
-				if ( trace.m_frac == 1.f )
-					break;
-			}
-		}
+               start = end = data.m_origin = trace.m_end;
 
-		data.m_origin = trace.m_end;
+               end.z( ) -= 2.f;
 
-		valve::g_engine_trace->trace_ray(
-			{
-				trace.m_end,
-				{ trace.m_end.x( ), trace.m_end.y( ), trace.m_end.z( ) - 2.f },
-				data.m_obb_min, data.m_obb_max
-			},
-			( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
-		);
+               valve::g_engine_trace->trace_ray(
+                       { start, end, data.m_obb_min, data.m_obb_max },
+                       ( valve::e_mask ) ( 0x200400bu ), &trace_filter, &trace
+               );
 
-		data.m_flags &= ~valve::e_ent_flags::on_ground;
+               if ( trace.m_frac == 1.f && trace.m_plane.m_normal.z( ) < 0.7f )
+                       data.m_flags &= ~valve::e_ent_flags::on_ground;
+               else
+                       data.m_flags |= valve::e_ent_flags::on_ground;
 
-		if ( trace.m_frac != 1.f
-			&& trace.m_plane.m_normal.z( ) > 0.7f )
-			data.m_flags |= valve::e_ent_flags::on_ground;
-	}
+               if ( data.m_flags & valve::e_ent_flags::on_ground ) {
+                       auto& layer = data.m_player->anim_layers( ).at( 4u );
+                       layer.m_cycle = 0.f;
+                       layer.m_weight = 0.f;
+               }
+       }
 
 
 	std::optional< aim_record_t > c_aim_bot::select_record( player_entry_t& entry ) const {
